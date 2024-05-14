@@ -1,10 +1,57 @@
 use std::{sync::Arc, thread::sleep_ms};
+use wgpu::util::DeviceExt;
 use winit::{
     event::{ElementState, Event, KeyEvent, StartCause, WindowEvent}, 
     event_loop::{EventLoop, EventLoopWindowTarget}, 
     keyboard::{Key, NamedKey}, 
     window::{Window, WindowBuilder}
 };
+
+#[repr(C)]
+#[derive(Debug,Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+// unsafe impl bytemuck::Pod for Vertex{}
+// unsafe impl bytemuck::Zeroable for Vertex{}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0=>Float32x3, 1=>Float32x3];
+
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            // 定义一个顶点所占的字节数
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            // 确定缓存数组中元素是一个顶点
+            step_mode: wgpu::VertexStepMode::Vertex,
+            // 描述顶点的布局
+            // attributes: &[
+            //     wgpu::VertexAttribute {
+                //  定义属性的字节偏移
+            //         offset: 0,
+                // 定义着色器要在什么位置存储这个属性，@location(0) x vec3f
+            //         shader_location: 0,
+                // 定义该属性的数据格式 Float32x3 => vec3ff
+            //         format: wgpu::VertexFormat::Float32x3,
+            //     },
+            //     wgpu::VertexAttribute {
+            //         offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+            //         shader_location: 1,
+            //         format: wgpu::VertexFormat::Float32x3,
+            //     }
+            // ]
+            attributes: &Self::ATTRIBS
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0,0.5,0.0],color: [1.0,0.0,0.0] },
+    Vertex { position: [-0.5,-0.5,0.0],color: [0.0,1.0,0.0] },
+    Vertex { position: [0.5,-0.5,0.0],color: [0.0,0.0,1.0] },
+];
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -14,6 +61,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
     render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
 }
 
 impl State {
@@ -83,6 +132,7 @@ impl State {
             bind_group_layouts: &[],
             push_constant_ranges: &[],
         });
+        // 渲染管线
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor{
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -90,8 +140,7 @@ impl State {
                 module: &shader,
                 compilation_options: Default::default(),
                 entry_point: "vs_main", // 指定函数的入口点
-                buffers: &[], // 定义传入什么类型的数据到顶点着色器
-    
+                buffers: &[Vertex::desc()], // 定义传入什么类型的数据到顶点着色器
             },
             fragment: Some(wgpu::FragmentState{
                 module: &shader,
@@ -107,7 +156,7 @@ impl State {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList, // 每3个顶点组成一个三角形
                 strip_index_format: None,
-                // 确定三角形的朝向
+                // 确定三角形的朝向（上 左下 右下）
                 front_face: wgpu::FrontFace::Ccw, // Ccw指定顶点的帧缓冲区坐标（framebuffer coordinates）按逆时针顺序给出的三角形为朝前（面向屏幕外）
                 // 如何剔除三角形
                 cull_mode: Some(wgpu::Face::Back), // Back指定朝后（面向屏幕内）的三角形会被剔除（不被渲染）
@@ -125,6 +174,16 @@ impl State {
             multiview: None
         });
 
+        // 顶点缓存区数据
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            // bytemuck::cast_slice() 将数据转换未&[u8]
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let num_vertices = VERTICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -132,7 +191,9 @@ impl State {
             config,
             size,
             clear_color,
-            render_pipeline
+            render_pipeline,
+            vertex_buffer,
+            num_vertices
         }
     }
 
@@ -206,8 +267,9 @@ impl State {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
-            render_pass.draw(0..3,0..1);
+            render_pass.draw(0..self.num_vertices,0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
