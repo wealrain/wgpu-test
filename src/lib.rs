@@ -1,4 +1,6 @@
 use std::{sync::Arc, thread::sleep_ms};
+use image::GenericImageView;
+use texture::Texture;
 use wgpu::util::DeviceExt;
 use winit::{
     event::{ElementState, Event, KeyEvent, StartCause, WindowEvent}, 
@@ -7,18 +9,21 @@ use winit::{
     window::{Window, WindowBuilder}
 };
 
+mod texture;
+
 #[repr(C)]
 #[derive(Debug,Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    // color: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
 // unsafe impl bytemuck::Pod for Vertex{}
 // unsafe impl bytemuck::Zeroable for Vertex{}
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0=>Float32x3, 1=>Float32x3];
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0=>Float32x3, 1=>Float32x2];
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
@@ -67,12 +72,30 @@ impl Vertex {
 //     Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
 // ];
 
+// const VERTICES: &[Vertex] = &[
+//     Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
+//     Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
+//     Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
+//     Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
+//     Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+// ];
+
+// Changed
+// const VERTICES: &[Vertex] = &[
+//     Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.99240386], }, // A
+//     Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.56958647], }, // B
+//     Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.05060294], }, // C
+//     Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.1526709], }, // D
+//     Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.7347359], }, // E
+// ];
+
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+    // 修改后的
+    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
+    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
+    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
+    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
+    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
 ];
 
 const INDICES: &[u16] = &[
@@ -93,6 +116,8 @@ struct State {
     num_vertices: u32,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    diffuse_bind_group: wgpu::BindGroup,
+    diffuse_texture: Texture,
 }
 
 impl State {
@@ -150,6 +175,100 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        // 加载图像
+        let diffuse_bytes = include_bytes!("../happy-tree.png");
+        // let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
+        // let diffuse_rgba = diffuse_image.to_rgba8();
+        // let dimensions = diffuse_image.dimensions(); 
+        let diffuse_texture = Texture::from_bytes(&device,&queue,diffuse_bytes,"happy-tree").unwrap();
+
+        // 创建纹理
+        // let texture_size = wgpu::Extent3d {
+        //     width: dimensions.0,
+        //     height: dimensions.1,
+        //     depth_or_array_layers: 1,
+        // };
+        // let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor{
+        //     size:texture_size,
+        //     mip_level_count: 1,
+        //     sample_count: 1,
+        //     dimension: wgpu::TextureDimension::D2,
+        //     // 大多数图像都是使用 sRGB 来存储的，我们需要在这里指定
+        //     format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        //     // TEXTURE_BINDING 表示我们要在着色器中使用这个纹理。
+        //     // COPY_DST 表示我们能将数据复制到这个纹理上。
+        //     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        //     label: Some("diffuse_texture"),
+        //     view_formats: &[],
+        // });
+
+        // 使用命令队列来填充纹理数据
+        // queue.write_texture(
+        //     // 告诉 wgpu 从何处复制像素数据
+        //     wgpu::ImageCopyTexture{
+        //     texture: &diffuse_texture,
+        //     mip_level: 0,
+        //     origin: wgpu::Origin3d::ZERO,
+        //     aspect: wgpu::TextureAspect::All,
+        // }, &diffuse_rgba, 
+        //  // 纹理的内存布局
+        // wgpu::ImageDataLayout{
+        //     offset:0,
+        //     bytes_per_row: Some(4 * dimensions.0),
+        //     rows_per_image: Some(dimensions.1),
+        // }, texture_size);
+
+        // 创建纹理视图和采样器
+        // let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor{
+        //     address_mode_u: wgpu::AddressMode::ClampToEdge, // 边缘拉伸
+        //     address_mode_v: wgpu::AddressMode::ClampToEdge,
+        //     address_mode_w: wgpu::AddressMode::ClampToEdge,
+        //     mag_filter: wgpu::FilterMode::Linear, // 线性插值
+        //     min_filter: wgpu::FilterMode::Nearest, // 近处会有像素感
+        //     mipmap_filter: wgpu::FilterMode::Nearest,
+        //     ..Default::default()
+        // });
+
+        // 创建绑定组
+        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor{
+            entries: &[
+                // 绑定到 0 资源槽的纹理
+                wgpu::BindGroupLayoutEntry {
+                    binding:0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                // 绑定到 1 资源槽的采样器
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("texture_bind_group_layout"),
+        });
+        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                },
+            ],
+            label: Some("texture_bind_group")
+        });
+
         let clear_color = wgpu::Color::BLACK;
 
         // 着色器
@@ -159,7 +278,7 @@ impl State {
         });
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&texture_bind_group_layout],
             push_constant_ranges: &[],
         });
         // 渲染管线
@@ -233,6 +352,8 @@ impl State {
             num_vertices,
             index_buffer,
             num_indices,
+            diffuse_bind_group,
+            diffuse_texture,
         }
     }
 
@@ -306,6 +427,7 @@ impl State {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
