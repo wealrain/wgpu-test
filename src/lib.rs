@@ -1,4 +1,5 @@
-use std::{sync::Arc, thread::sleep_ms};
+use std::{sync::Arc};
+use camera::{Camera, CameraController};
 use image::GenericImageView;
 use texture::Texture;
 use wgpu::util::DeviceExt;
@@ -10,6 +11,7 @@ use winit::{
 };
 
 mod texture;
+mod camera;
 
 #[repr(C)]
 #[derive(Debug,Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -104,6 +106,23 @@ const INDICES: &[u16] = &[
     2, 3, 4,
 ];
 
+#[repr(C)]
+#[derive(Debug,Clone, Copy,bytemuck::Pod,bytemuck::Zeroable)]
+// 视图投影矩阵
+struct CameraUniform {
+    view_proj: [[f32;4];4]
+}
+
+impl CameraUniform {
+    fn new()->Self {
+        Self { view_proj: glam::Mat4::IDENTITY.to_cols_array_2d() }
+    }
+
+    fn update_view_proj(&mut self,camera: &Camera) {
+        self.view_proj = camera.build_view_projection_matrix().to_cols_array_2d();
+    }
+}
+
 struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -118,6 +137,11 @@ struct State {
     num_indices: u32,
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: Texture,
+    camera: Camera,
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
+    camera_controller: CameraController,
 }
 
 impl State {
@@ -269,6 +293,42 @@ impl State {
             label: Some("texture_bind_group")
         });
 
+         // 定义摄像机
+         let camera = Camera::new(config.width as f32 / config.height as f32);
+
+         let mut camera_uniform = CameraUniform::new();
+         camera_uniform.update_view_proj(&camera);
+         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+             label: Some("camera uniform"),
+             contents: bytemuck::cast_slice(&[camera_uniform]),
+             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
+         });
+         let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { 
+             label: Some("camera_bind_group_layout"), 
+             entries: &[
+                 wgpu::BindGroupLayoutEntry {
+                     binding: 0,
+                     visibility: wgpu::ShaderStages::VERTEX,
+                     ty: wgpu::BindingType::Buffer {
+                         ty: wgpu::BufferBindingType::Uniform,
+                         has_dynamic_offset: false,
+                         min_binding_size: None
+                     },
+                     count: None
+                 }
+             ]
+         });
+         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor{
+             label:Some("camera_bind_group"),
+             layout: &camera_bind_group_layout,
+             entries: &[
+                 wgpu::BindGroupEntry{
+                     binding:0,
+                     resource: camera_buffer.as_entire_binding()
+                 }
+             ]
+         });
+
         let clear_color = wgpu::Color::BLACK;
 
         // 着色器
@@ -278,7 +338,10 @@ impl State {
         });
         let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor{
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[&texture_bind_group_layout],
+            bind_group_layouts: &[
+                &texture_bind_group_layout,
+                &camera_bind_group_layout
+            ],
             push_constant_ranges: &[],
         });
         // 渲染管线
@@ -340,6 +403,9 @@ impl State {
             usage: wgpu::BufferUsages::INDEX,
         });
         let num_indices = INDICES.len() as u32;
+
+        let camera_controller = CameraController::new(0.2);
+
         Self {
             surface,
             device,
@@ -354,6 +420,11 @@ impl State {
             num_indices,
             diffuse_bind_group,
             diffuse_texture,
+            camera,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+            camera_controller
         }
     }
 
@@ -370,28 +441,32 @@ impl State {
 
     // 表示一个事件是在此处处理（），如果处理了主循环就不再处理了
     fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    state,
-                    logical_key: Key::Named(NamedKey::Space),
-                    ..
-                }, .. 
-            } => {
-                self.clear_color = if *state == ElementState::Released {
-                    wgpu::Color::BLUE
-                } else {
-                    wgpu::Color::WHITE
-                };
+        // match event {
+        //     WindowEvent::KeyboardInput {
+        //         event: KeyEvent {
+        //             state,
+        //             logical_key: Key::Named(NamedKey::Space),
+        //             ..
+        //         }, .. 
+        //     } => {
+        //         self.clear_color = if *state == ElementState::Released {
+        //             wgpu::Color::BLUE
+        //         } else {
+        //             wgpu::Color::WHITE
+        //         };
 
-                true
-            }
+        //         true
+        //     }
 
-            _ => false
-        }
+        //     _ => false
+        // }
+        self.camera_controller.process_events(event)
     }
 
     fn update(&mut self) {
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_view_proj(&self.camera);
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -428,6 +503,7 @@ impl State {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
