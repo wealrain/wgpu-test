@@ -24,7 +24,7 @@ impl Camera {
         Camera {
             eye: (0.0,1.0,2.0).into(),
             // 看向原点
-            target: (0.0,0.0,0.0).into(),
+            target: (0.0,1.0,0.0).into(),
             up: glam::Vec3::Y,
             aspect: aspect,
             fovy: 45.0,
@@ -93,6 +93,7 @@ impl CameraController {
 
     pub fn update_camera(&self, camera: &mut Camera) {
         let forward = camera.target - camera.eye;
+        // 归一化,方便后面计算步长
         let forward_norm = forward.normalize();
         let forward_mag = forward.length();
 
@@ -104,6 +105,7 @@ impl CameraController {
             camera.eye -= forward_norm * self.speed;
         }
 
+        // 获取法向量
         let right = forward_norm.cross(camera.up);
 
         // 在按下前进或后退键时重做半径计算

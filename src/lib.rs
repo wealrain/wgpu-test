@@ -1,6 +1,7 @@
-use std::{sync::Arc};
+use std::{f32::consts, sync::Arc};
 use camera::{Camera, CameraController};
 use image::GenericImageView;
+use instance::{Instance, InstanceRaw};
 use texture::Texture;
 use wgpu::util::DeviceExt;
 use winit::{
@@ -12,6 +13,7 @@ use winit::{
 
 mod texture;
 mod camera;
+mod instance;
 
 #[repr(C)]
 #[derive(Debug,Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -113,6 +115,8 @@ struct CameraUniform {
     view_proj: [[f32;4];4]
 }
 
+
+
 impl CameraUniform {
     fn new()->Self {
         Self { view_proj: glam::Mat4::IDENTITY.to_cols_array_2d() }
@@ -142,7 +146,12 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
+
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: glam::Vec3 = glam::Vec3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5,0.0,NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
 impl State {
     async fn new(window: Arc<Window>) -> Self {
@@ -329,6 +338,26 @@ impl State {
              ]
          });
 
+         // 创建实例缓冲区  10行10列
+         let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z|{
+            (0..NUM_INSTANCES_PER_ROW).map(move |x|{
+                let position = glam::Vec3{x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
+                let rotation = if position.length().abs() <= std::f32::EPSILON {
+                    glam::Quat::from_axis_angle(glam::Vec3::Z, 0.0)
+                } else {
+                    glam::Quat::from_axis_angle(position.normalize(), consts::FRAC_PI_4)
+                };
+
+                Instance { position, rotation }
+            }) 
+         }).collect::<Vec<_>>();
+         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label: Some("instance_buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX
+         });
+
         let clear_color = wgpu::Color::BLACK;
 
         // 着色器
@@ -352,7 +381,7 @@ impl State {
                 module: &shader,
                 compilation_options: Default::default(),
                 entry_point: "vs_main", // 指定函数的入口点
-                buffers: &[Vertex::desc()], // 定义传入什么类型的数据到顶点着色器
+                buffers: &[Vertex::desc(),InstanceRaw::desc()], // 定义传入什么类型的数据到顶点着色器
             },
             fragment: Some(wgpu::FragmentState{
                 module: &shader,
@@ -424,7 +453,9 @@ impl State {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
-            camera_controller
+            camera_controller,
+            instances,
+            instance_buffer
         }
     }
 
@@ -505,10 +536,11 @@ impl State {
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
             // render_pass.draw(0..self.num_vertices,0..1);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
