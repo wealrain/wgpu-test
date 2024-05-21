@@ -148,6 +148,7 @@ struct State {
     camera_controller: CameraController,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
+    depth_texture: Texture,
 }
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
@@ -358,6 +359,9 @@ impl State {
             usage: wgpu::BufferUsages::VERTEX
          });
 
+         // 深度纹理
+         let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+
         let clear_color = wgpu::Color::BLACK;
 
         // 着色器
@@ -405,8 +409,15 @@ impl State {
                 unclipped_depth: false,
                 conservative: false,
             },
-    
-            depth_stencil: None,
+            // 启用深度测试
+            depth_stencil: Some(wgpu::DepthStencilState{
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                // 使用 LESS 意味着像素将被从后往前绘制，大于当前位置的深度值的像素将被丢弃
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1, // 多采样
                 mask: !0, 
@@ -455,7 +466,8 @@ impl State {
             camera_bind_group,
             camera_controller,
             instances,
-            instance_buffer
+            instance_buffer,
+            depth_texture
         }
     }
 
@@ -467,6 +479,9 @@ impl State {
             self.config.height = new_size.height;
              // 需要在每次窗口改变时重新配置surface
             self.surface.configure(&self.device, &self.config);
+            // 确保更新了 config 之后一定要更新 depth_texture，否则程序就会崩溃，
+            // 因为此时 depth_texture 与surface 纹理的宽高已经不一致了
+            self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth texture");
         }
     }
 
@@ -513,7 +528,15 @@ impl State {
             // 创建渲染通道来编码所有实际绘制的命令
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor{
                 label: Some("Render Pass"),
-                
+                // 绑定深度纹理
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations{
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store
+                    }),
+                    stencil_ops: None
+                }),
                 color_attachments: &[
                     // 这个时片元着色器中@location(0) 标记指向的颜色附件
                     Some(wgpu::RenderPassColorAttachment{
