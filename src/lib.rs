@@ -10,51 +10,14 @@ use winit::{
     keyboard::{Key, NamedKey}, 
     window::{Window, WindowBuilder}
 };
+use model::Vertex;
 
 mod texture;
 mod camera;
 mod instance;
+mod model;
+mod resources;
 
-#[repr(C)]
-#[derive(Debug,Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    // color: [f32; 3],
-    tex_coords: [f32; 2],
-}
-
-// unsafe impl bytemuck::Pod for Vertex{}
-// unsafe impl bytemuck::Zeroable for Vertex{}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0=>Float32x3, 1=>Float32x2];
-
-    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        wgpu::VertexBufferLayout {
-            // 定义一个顶点所占的字节数
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            // 确定缓存数组中元素是一个顶点
-            step_mode: wgpu::VertexStepMode::Vertex,
-            // 描述顶点的布局
-            // attributes: &[
-            //     wgpu::VertexAttribute {
-                //  定义属性的字节偏移
-            //         offset: 0,
-                // 定义着色器要在什么位置存储这个属性，@location(0) x vec3f
-            //         shader_location: 0,
-                // 定义该属性的数据格式 Float32x3 => vec3ff
-            //         format: wgpu::VertexFormat::Float32x3,
-            //     },
-            //     wgpu::VertexAttribute {
-            //         offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-            //         shader_location: 1,
-            //         format: wgpu::VertexFormat::Float32x3,
-            //     }
-            // ]
-            attributes: &Self::ATTRIBS
-        }
-    }
-}
 
 // const VERTICES: &[Vertex] = &[
 //     Vertex { position: [0.0,0.5,0.0],color: [1.0,0.0,0.0] },
@@ -93,14 +56,14 @@ impl Vertex {
 //     Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.7347359], }, // E
 // ];
 
-const VERTICES: &[Vertex] = &[
-    // 修改后的
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
-];
+// const VERTICES: &[Vertex] = &[
+//     // 修改后的
+//     Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
+//     Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
+//     Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
+//     Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
+//     Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
+// ];
 
 const INDICES: &[u16] = &[
     0, 1, 4,
@@ -135,8 +98,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    num_vertices: u32,
+    // vertex_buffer: wgpu::Buffer,
+    // num_vertices: u32,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
     diffuse_bind_group: wgpu::BindGroup,
@@ -149,6 +112,7 @@ struct State {
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: Texture,
+    obj_model: model::Model,
 }
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
@@ -339,10 +303,15 @@ impl State {
              ]
          });
 
+         const SPACE_BETWEEN: f32 = 3.0;
          // 创建实例缓冲区  10行10列
          let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z|{
             (0..NUM_INSTANCES_PER_ROW).map(move |x|{
-                let position = glam::Vec3{x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
+                let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                let z = SPACE_BETWEEN* (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+
+                // let position = glam::Vec3{x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
+                let position = glam::Vec3{x,y:0.0,z};
                 let rotation = if position.length().abs() <= std::f32::EPSILON {
                     glam::Quat::from_axis_angle(glam::Vec3::Z, 0.0)
                 } else {
@@ -385,7 +354,7 @@ impl State {
                 module: &shader,
                 compilation_options: Default::default(),
                 entry_point: "vs_main", // 指定函数的入口点
-                buffers: &[Vertex::desc(),InstanceRaw::desc()], // 定义传入什么类型的数据到顶点着色器
+                buffers: &[model::ModelVertex::desc(),InstanceRaw::desc()], // 定义传入什么类型的数据到顶点着色器
             },
             fragment: Some(wgpu::FragmentState{
                 module: &shader,
@@ -427,14 +396,14 @@ impl State {
         });
 
         // 顶点缓存区数据
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            // bytemuck::cast_slice() 将数据转换未&[u8]
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        // let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //     label: Some("Vertex Buffer"),
+        //     // bytemuck::cast_slice() 将数据转换未&[u8]
+        //     contents: bytemuck::cast_slice(VERTICES),
+        //     usage: wgpu::BufferUsages::VERTEX,
+        // });
 
-        let num_vertices = VERTICES.len() as u32;
+        // let num_vertices = VERTICES.len() as u32;
 
         // 索引缓存区数据
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
@@ -446,6 +415,9 @@ impl State {
 
         let camera_controller = CameraController::new(0.2);
 
+        // 加载模型
+        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout).await.unwrap();
+
         Self {
             surface,
             device,
@@ -454,8 +426,8 @@ impl State {
             size,
             clear_color,
             render_pipeline,
-            vertex_buffer,
-            num_vertices,
+            // vertex_buffer,
+            // num_vertices,
             index_buffer,
             num_indices,
             diffuse_bind_group,
@@ -467,7 +439,8 @@ impl State {
             camera_controller,
             instances,
             instance_buffer,
-            depth_texture
+            depth_texture,
+            obj_model
         }
     }
 
@@ -555,15 +528,25 @@ impl State {
                 })],
                 ..Default::default()
             });
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            // render_pass.set_pipeline(&self.render_pipeline);
+            // render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            // render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            // render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            // //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
+            // // render_pass.draw(0..self.num_vertices,0..1);
+            // render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            //告诉 wgpu 用 3 个顶点和 1 个实例（实例的索引就是 @builtin(vertex_index) 的由来）来进行绘制。
-            // render_pass.draw(0..self.num_vertices,0..1);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+            render_pass.set_pipeline(&self.render_pipeline);
+           
+
+            use model::DrawModel;
+            // let mesh = &self.obj_model.meshes[0];
+            // let material = &self.obj_model.materials[mesh.material];
+            // render_pass.draw_mesh_instanced(mesh, 0..self.instances.len() as u32,material,&self.camera_bind_group);
+            render_pass.draw_model_instanced(&self.obj_model, 0..self.instances.len() as u32, &self.camera_bind_group)
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
